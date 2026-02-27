@@ -4,6 +4,7 @@
  *
  * Build (on device):
  *   clang -I/var/sdk/usr/local/include -dynamiclib -lsubstrate -lobjc \
+ *     -framework CoreFoundation \
  *     -o /tmp/ScrollingWallpaper.dylib ScrollingWallpaper.m
  *   ldid -S /tmp/ScrollingWallpaper.dylib
  */
@@ -18,189 +19,224 @@ typedef struct { float width, height; } CGSize;
 typedef struct { CGPoint origin; CGSize size; } CGRect;
 typedef struct { float a, b, c, d, tx, ty; } CGAffineTransform;
 
+static const CGAffineTransform kIdentity = { 1, 0, 0, 1, 0, 0 };
+
+/* --- CoreFoundation types (no headers available) --- */
+
+typedef const void *CFStringRef;
+typedef const void *CFNotificationCenterRef;
+typedef const void *CFDictionaryRef;
+typedef unsigned char Boolean;
+
+#define CFSTR(s) __builtin___CFStringMakeConstantString(s)
+
+extern Boolean CFPreferencesGetAppBooleanValue(
+    CFStringRef key, CFStringRef appID, Boolean *keyExistsAndHasValidFormat);
+
+extern CFNotificationCenterRef CFNotificationCenterGetDarwinNotifyCenter(void);
+
+typedef void (*CFNotificationCallback)(
+    CFNotificationCenterRef, void *, CFStringRef, const void *, CFDictionaryRef);
+
+extern void CFNotificationCenterAddObserver(
+    CFNotificationCenterRef center, const void *observer,
+    CFNotificationCallback callBack, CFStringRef name,
+    const void *object, long suspensionBehavior);
+
 /* --- MobileSubstrate --- */
 
 extern void MSHookMessageEx(Class cls, SEL sel, IMP imp, IMP *result);
 
-/* --- Typed objc_msgSend casts --- */
+/* --- Typed objc_msgSend casts (armv7: stret for structs > 4 bytes) --- */
 
-typedef void *(*msg_id)(void *, SEL);
-
-/*
- * armv7 ABI: any struct > 4 bytes is returned via stret (hidden first param).
- * CGPoint (8), CGSize (8), CGRect (16) ALL need objc_msgSend_stret.
- */
-typedef void (*msg_point_stret)(CGPoint *, void *, SEL);
-typedef void (*msg_size_stret)(CGSize *, void *, SEL);
-typedef void (*msg_rect_stret)(CGRect *, void *, SEL);
-
-/* setTransform: takes CGAffineTransform by value */
-typedef void (*msg_setTransform)(void *, SEL, CGAffineTransform);
+typedef void *(*msg_id)       (void *, SEL);
+typedef BOOL  (*msg_bool)     (void *, SEL);
+typedef void  (*msg_void)     (void *, SEL);
+typedef void  (*msg_void_2id) (void *, SEL, void *, void *);
+typedef void  (*msg_void_dbl) (void *, SEL, double);
+typedef void  (*msg_point_s)  (CGPoint *, void *, SEL);
+typedef void  (*msg_size_s)   (CGSize *, void *, SEL);
+typedef void  (*msg_rect_s)   (CGRect *, void *, SEL);
+typedef void  (*msg_setXform) (void *, SEL, CGAffineTransform);
 
 /* --- Constants --- */
 
-static const float kScale = 1.08f;  /* 8% zoom to hide edges */
+static const float  kScale       = 1.08f;
+static const double kAnimOut     = 0.15;  /* to identity before app launch */
+static const double kAnimIn      = 0.25;  /* to parallax on return */
 
 /* --- State --- */
 
-static float sProgress     = 0.0f;  /* 0.0 = first page, 1.0 = last */
-static BOOL  sAppLaunching = NO;    /* suppress during app transitions */
+static float sProgress = 0.0f;
+static BOOL  sEnabled  = YES;
 
-/* --- Helper: apply parallax transform to wallpaper view --- */
+/* --- Helpers --- */
 
-static void applyWallpaperTransform(void) {
-    Class SBUICtrlCls = objc_getClass("SBUIController");
-    void *uiCtrl = ((msg_id)objc_msgSend)((void *)SBUICtrlCls,
-                                           sel_registerName("sharedInstance"));
-    void *wpView = ((msg_id)objc_msgSend)(uiCtrl,
-                                           sel_registerName("wallpaperView"));
-    if (!wpView) return;
-
-    CGRect wpBounds;
-    ((msg_rect_stret)objc_msgSend_stret)(&wpBounds, wpView,
-                                          sel_registerName("bounds"));
-
-    float panRange = (kScale - 1.0f) * wpBounds.size.width;
-    float xShift   = (0.5f - sProgress) * panRange;
-
-    CGAffineTransform t = {
-        kScale, 0.0f,
-        0.0f,   kScale,
-        xShift, 0.0f
-    };
-    ((msg_setTransform)objc_msgSend)(wpView,
-                                      sel_registerName("setTransform:"), t);
+static void *getWallpaperView(void) {
+    void *ctrl = ((msg_id)objc_msgSend)(
+        (void *)objc_getClass("SBUIController"),
+        sel_registerName("sharedInstance"));
+    return ((msg_id)objc_msgSend)(ctrl, sel_registerName("wallpaperView"));
 }
 
-/* --- Helper: read scroll progress from icon scroll view --- */
+static void beginAnim(double dur) {
+    void *uv = (void *)objc_getClass("UIView");
+    ((msg_void_2id)objc_msgSend)(uv, sel_registerName("beginAnimations:context:"), 0, 0);
+    ((msg_void_dbl)objc_msgSend)(uv, sel_registerName("setAnimationDuration:"), dur);
+}
 
-static float readScrollProgress(void) {
-    Class SBIconCtrlCls = objc_getClass("SBIconController");
-    void *iconCtrl = ((msg_id)objc_msgSend)((void *)SBIconCtrlCls,
-                                             sel_registerName("sharedInstance"));
-    void *sv = ((msg_id)objc_msgSend)(iconCtrl,
-                                       sel_registerName("scrollView"));
+static void commitAnim(void) {
+    ((msg_void)objc_msgSend)(
+        (void *)objc_getClass("UIView"), sel_registerName("commitAnimations"));
+}
+
+static void setXform(void *view, CGAffineTransform t) {
+    ((msg_setXform)objc_msgSend)(view, sel_registerName("setTransform:"), t);
+}
+
+static void applyParallax(void) {
+    void *wp = getWallpaperView();
+    if (!wp) return;
+
+    CGRect b;
+    ((msg_rect_s)objc_msgSend_stret)(&b, wp, sel_registerName("bounds"));
+
+    float pan   = (kScale - 1.0f) * b.size.width;
+    float shift = (0.5f - sProgress) * pan;
+    CGAffineTransform t = { kScale, 0, 0, kScale, shift, 0 };
+    setXform(wp, t);
+}
+
+static float readProgress(void) {
+    void *ic = ((msg_id)objc_msgSend)(
+        (void *)objc_getClass("SBIconController"),
+        sel_registerName("sharedInstance"));
+    void *sv = ((msg_id)objc_msgSend)(ic, sel_registerName("scrollView"));
     if (!sv) return 0.0f;
 
-    CGPoint offset;
-    ((msg_point_stret)objc_msgSend_stret)(&offset, sv,
-                                           sel_registerName("contentOffset"));
-    CGSize csize;
-    ((msg_size_stret)objc_msgSend_stret)(&csize, sv,
-                                          sel_registerName("contentSize"));
-    CGRect bounds;
-    ((msg_rect_stret)objc_msgSend_stret)(&bounds, sv,
-                                          sel_registerName("bounds"));
+    CGPoint off; ((msg_point_s)objc_msgSend_stret)(&off, sv, sel_registerName("contentOffset"));
+    CGSize  cs;  ((msg_size_s)objc_msgSend_stret)(&cs,  sv, sel_registerName("contentSize"));
+    CGRect  b;   ((msg_rect_s)objc_msgSend_stret)(&b,   sv, sel_registerName("bounds"));
 
-    float maxOff = csize.width - bounds.size.width;
-    if (maxOff <= 0.0f) return 0.0f;
-
-    float p = offset.x / maxOff;
-    if (p < 0.0f) p = 0.0f;
-    if (p > 1.0f) p = 1.0f;
-    return p;
+    float max = cs.width - b.size.width;
+    if (max <= 0.0f) return 0.0f;
+    float p = off.x / max;
+    return p < 0.0f ? 0.0f : p > 1.0f ? 1.0f : p;
 }
 
-/* ============================================================
- * HOOK 1: SBIconController -scrollViewDidScroll:
- * Normal scroll tracking — skipped during app transitions.
- * ============================================================ */
+/* --- Preferences --- */
 
-static void (*orig_scrollViewDidScroll)(void *, SEL, void *);
+static void loadPrefs(void) {
+    Boolean exists = 0;
+    Boolean val = CFPreferencesGetAppBooleanValue(
+        CFSTR("Enabled"),
+        CFSTR("com.ios6hacks.scrollingwallpaper"), &exists);
+    BOOL was = sEnabled;
+    sEnabled = exists ? (BOOL)val : YES;
 
-static void hook_scrollViewDidScroll(void *self, SEL _cmd, void *scrollView) {
-    orig_scrollViewDidScroll(self, _cmd, scrollView);
-
-    if (sAppLaunching) return;
-
-    CGPoint offset;
-    ((msg_point_stret)objc_msgSend_stret)(&offset, scrollView,
-                                           sel_registerName("contentOffset"));
-    CGSize csize;
-    ((msg_size_stret)objc_msgSend_stret)(&csize, scrollView,
-                                          sel_registerName("contentSize"));
-    CGRect bounds;
-    ((msg_rect_stret)objc_msgSend_stret)(&bounds, scrollView,
-                                          sel_registerName("bounds"));
-
-    float maxOffset = csize.width - bounds.size.width;
-    if (maxOffset <= 0.0f) return;
-
-    float progress = offset.x / maxOffset;
-    if (progress < 0.0f) progress = 0.0f;
-    if (progress > 1.0f) progress = 1.0f;
-
-    sProgress = progress;
-    applyWallpaperTransform();
+    if (was && !sEnabled) {
+        beginAnim(kAnimIn);
+        void *wp = getWallpaperView();
+        if (wp) setXform(wp, kIdentity);
+        commitAnim();
+    } else if (!was && sEnabled) {
+        sProgress = readProgress();
+        beginAnim(kAnimIn);
+        applyParallax();
+        commitAnim();
+    }
 }
 
-/* ============================================================
- * HOOK 2: SBUIController -finishLaunching
- * Pre-apply the 1.08x scale at boot so the first scroll
- * doesn't visibly snap from 1.0 → 1.08.
- * ============================================================ */
-
-static void (*orig_finishLaunching)(void *, SEL);
-
-static void hook_finishLaunching(void *self, SEL _cmd) {
-    orig_finishLaunching(self, _cmd);
-
-    sProgress = readScrollProgress();
-    applyWallpaperTransform();
+static void prefsChanged(CFNotificationCenterRef c, void *obs,
+                          CFStringRef name, const void *obj,
+                          CFDictionaryRef info) {
+    loadPrefs();
 }
 
-/* ============================================================
- * HOOK 3: SBUIController -activateApplicationAnimated:
- * Stop touching the wallpaper during app-launch animations.
- * ============================================================ */
+/* === HOOKS === */
 
-static void (*orig_activateApp)(void *, SEL, void *);
+/* 1. SBIconController -scrollViewDidScroll:
+ * Only during real user touches (isDragging/isDecelerating). */
 
-static void hook_activateApp(void *self, SEL _cmd, void *app) {
-    sAppLaunching = YES;
-    orig_activateApp(self, _cmd, app);
+static void (*orig_scroll)(void *, SEL, void *);
+static void hook_scroll(void *self, SEL _cmd, void *sv) {
+    orig_scroll(self, _cmd, sv);
+    if (!sEnabled) return;
+
+    BOOL drag = ((msg_bool)objc_msgSend)(sv, sel_registerName("isDragging"));
+    BOOL decel = ((msg_bool)objc_msgSend)(sv, sel_registerName("isDecelerating"));
+    if (!drag && !decel) return;
+
+    CGPoint off; ((msg_point_s)objc_msgSend_stret)(&off, sv, sel_registerName("contentOffset"));
+    CGSize  cs;  ((msg_size_s)objc_msgSend_stret)(&cs,  sv, sel_registerName("contentSize"));
+    CGRect  b;   ((msg_rect_s)objc_msgSend_stret)(&b,   sv, sel_registerName("bounds"));
+
+    float max = cs.width - b.size.width;
+    if (max <= 0.0f) return;
+    float p = off.x / max;
+    sProgress = p < 0.0f ? 0.0f : p > 1.0f ? 1.0f : p;
+    applyParallax();
 }
 
-/* ============================================================
- * HOOK 4: SBUIController -restoreIconListAnimated:
- * Re-apply our transform when returning to the home screen.
- * ============================================================ */
+/* 2. SBUIController -finishLaunching
+ * Pre-apply at boot so the first swipe doesn't snap. */
 
-static void (*orig_restoreIconList)(void *, SEL, BOOL);
-
-static void hook_restoreIconList(void *self, SEL _cmd, BOOL animated) {
-    orig_restoreIconList(self, _cmd, animated);
-    sAppLaunching = NO;
-    applyWallpaperTransform();
+static void (*orig_finish)(void *, SEL);
+static void hook_finish(void *self, SEL _cmd) {
+    orig_finish(self, _cmd);
+    if (!sEnabled) return;
+    sProgress = readProgress();
+    applyParallax();
 }
 
-/* ============================================================
- * Constructor: install all hooks at load time.
- * ============================================================ */
+/* 3. SBUIController -activateApplicationAnimated:
+ * Quickly animate wallpaper to identity before iOS does its thing. */
+
+static void (*orig_activate)(void *, SEL, void *);
+static void hook_activate(void *self, SEL _cmd, void *app) {
+    if (sEnabled) {
+        beginAnim(kAnimOut);
+        void *wp = getWallpaperView();
+        if (wp) setXform(wp, kIdentity);
+        commitAnim();
+    }
+    orig_activate(self, _cmd, app);
+}
+
+/* 4. SBUIController -stopRestoringIconList
+ * Animate back to parallax when home screen is fully restored. */
+
+static void (*orig_stopRestore)(void *, SEL);
+static void hook_stopRestore(void *self, SEL _cmd) {
+    orig_stopRestore(self, _cmd);
+    if (!sEnabled) return;
+    sProgress = readProgress();
+    beginAnim(kAnimIn);
+    applyParallax();
+    commitAnim();
+}
+
+/* === Constructor === */
 
 __attribute__((constructor))
 static void init(void) {
-    Class iconCls = objc_getClass("SBIconController");
-    Class uiCls   = objc_getClass("SBUIController");
-    if (!iconCls || !uiCls) return;
+    Class ic = objc_getClass("SBIconController");
+    Class ui = objc_getClass("SBUIController");
+    if (!ic || !ui) return;
 
-    MSHookMessageEx(iconCls,
-                    sel_registerName("scrollViewDidScroll:"),
-                    (IMP)hook_scrollViewDidScroll,
-                    (IMP *)&orig_scrollViewDidScroll);
+    CFNotificationCenterAddObserver(
+        CFNotificationCenterGetDarwinNotifyCenter(), NULL,
+        prefsChanged,
+        CFSTR("com.ios6hacks.scrollingwallpaper/prefsChanged"),
+        NULL, 0);
+    loadPrefs();
 
-    MSHookMessageEx(uiCls,
-                    sel_registerName("finishLaunching"),
-                    (IMP)hook_finishLaunching,
-                    (IMP *)&orig_finishLaunching);
-
-    MSHookMessageEx(uiCls,
-                    sel_registerName("activateApplicationAnimated:"),
-                    (IMP)hook_activateApp,
-                    (IMP *)&orig_activateApp);
-
-    MSHookMessageEx(uiCls,
-                    sel_registerName("restoreIconListAnimated:"),
-                    (IMP)hook_restoreIconList,
-                    (IMP *)&orig_restoreIconList);
+    MSHookMessageEx(ic, sel_registerName("scrollViewDidScroll:"),
+                    (IMP)hook_scroll, (IMP *)&orig_scroll);
+    MSHookMessageEx(ui, sel_registerName("finishLaunching"),
+                    (IMP)hook_finish, (IMP *)&orig_finish);
+    MSHookMessageEx(ui, sel_registerName("activateApplicationAnimated:"),
+                    (IMP)hook_activate, (IMP *)&orig_activate);
+    MSHookMessageEx(ui, sel_registerName("stopRestoringIconList"),
+                    (IMP)hook_stopRestore, (IMP *)&orig_stopRestore);
 }
