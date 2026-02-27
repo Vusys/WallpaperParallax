@@ -4,7 +4,7 @@
  *
  * Build (on device):
  *   clang -I/var/sdk/usr/local/include -dynamiclib -lsubstrate -lobjc \
- *     -framework CoreFoundation \
+ *     -Wl,-undefined,dynamic_lookup \
  *     -o /tmp/ScrollingWallpaper.dylib ScrollingWallpaper.m
  *   ldid -S /tmp/ScrollingWallpaper.dylib
  */
@@ -32,6 +32,7 @@ typedef unsigned char Boolean;
 
 extern Boolean CFPreferencesGetAppBooleanValue(
     CFStringRef key, CFStringRef appID, Boolean *keyExistsAndHasValidFormat);
+extern void CFPreferencesAppSynchronize(CFStringRef appID);
 
 extern CFNotificationCenterRef CFNotificationCenterGetDarwinNotifyCenter(void);
 
@@ -61,9 +62,8 @@ typedef void  (*msg_setXform) (void *, SEL, CGAffineTransform);
 
 /* --- Constants --- */
 
-static const float  kScale       = 1.08f;
-static const double kAnimOut     = 0.15;  /* to identity before app launch */
-static const double kAnimIn      = 0.25;  /* to parallax on return */
+static const float  kScale   = 1.08f;
+static const double kAnimIn  = 0.25;  /* parallax fade-in on return */
 
 /* --- State --- */
 
@@ -81,8 +81,10 @@ static void *getWallpaperView(void) {
 
 static void beginAnim(double dur) {
     void *uv = (void *)objc_getClass("UIView");
-    ((msg_void_2id)objc_msgSend)(uv, sel_registerName("beginAnimations:context:"), 0, 0);
-    ((msg_void_dbl)objc_msgSend)(uv, sel_registerName("setAnimationDuration:"), dur);
+    ((msg_void_2id)objc_msgSend)(uv,
+        sel_registerName("beginAnimations:context:"), (void *)0, (void *)0);
+    ((msg_void_dbl)objc_msgSend)(uv,
+        sel_registerName("setAnimationDuration:"), dur);
 }
 
 static void commitAnim(void) {
@@ -126,24 +128,24 @@ static float readProgress(void) {
 
 /* --- Preferences --- */
 
+#define PREFS_ID CFSTR("com.ios6hacks.scrollingwallpaper")
+
 static void loadPrefs(void) {
+    CFPreferencesAppSynchronize(PREFS_ID);
+
     Boolean exists = 0;
     Boolean val = CFPreferencesGetAppBooleanValue(
-        CFSTR("Enabled"),
-        CFSTR("com.ios6hacks.scrollingwallpaper"), &exists);
+        CFSTR("Enabled"), PREFS_ID, &exists);
     BOOL was = sEnabled;
     sEnabled = exists ? (BOOL)val : YES;
 
+    /* Respond to toggle immediately */
     if (was && !sEnabled) {
-        beginAnim(kAnimIn);
         void *wp = getWallpaperView();
         if (wp) setXform(wp, kIdentity);
-        commitAnim();
     } else if (!was && sEnabled) {
         sProgress = readProgress();
-        beginAnim(kAnimIn);
         applyParallax();
-        commitAnim();
     }
 }
 
@@ -190,30 +192,46 @@ static void hook_finish(void *self, SEL _cmd) {
 }
 
 /* 3. SBUIController -activateApplicationAnimated:
- * Quickly animate wallpaper to identity before iOS does its thing. */
+ * Instantly reset wallpaper to identity BEFORE iOS begins its
+ * launch animation.  iOS expects identity as the starting state;
+ * our 1.08x scale was throwing off its animation.
+ * The snap from 1.08x→1.0x is hidden by the launch animation
+ * starting on the same frame. */
 
 static void (*orig_activate)(void *, SEL, void *);
 static void hook_activate(void *self, SEL _cmd, void *app) {
     if (sEnabled) {
-        beginAnim(kAnimOut);
         void *wp = getWallpaperView();
         if (wp) setXform(wp, kIdentity);
-        commitAnim();
     }
     orig_activate(self, _cmd, app);
 }
 
-/* 4. SBUIController -stopRestoringIconList
- * Animate back to parallax when home screen is fully restored. */
+/* 4. SBUIController -applicationSuspendAnimationDidStop:finished:context:
+ * Fires AFTER the zoom-out return animation completes — the home
+ * screen is now fully visible.  Animate back to our parallax state. */
+
+static void (*orig_suspendStop)(void *, SEL, void *, void *, void *);
+static void hook_suspendStop(void *self, SEL _cmd,
+                              void *app, void *finished, void *ctx) {
+    orig_suspendStop(self, _cmd, app, finished, ctx);
+    if (!sEnabled) return;
+    sProgress = readProgress();
+    beginAnim(kAnimIn);
+    applyParallax();
+    commitAnim();
+}
+
+/* 5. SBUIController -stopRestoringIconList
+ * Safety net: also re-apply here in case the suspend callback
+ * doesn't cover all return paths (e.g. app crash, kill). */
 
 static void (*orig_stopRestore)(void *, SEL);
 static void hook_stopRestore(void *self, SEL _cmd) {
     orig_stopRestore(self, _cmd);
     if (!sEnabled) return;
     sProgress = readProgress();
-    beginAnim(kAnimIn);
     applyParallax();
-    commitAnim();
 }
 
 /* === Constructor === */
@@ -237,6 +255,9 @@ static void init(void) {
                     (IMP)hook_finish, (IMP *)&orig_finish);
     MSHookMessageEx(ui, sel_registerName("activateApplicationAnimated:"),
                     (IMP)hook_activate, (IMP *)&orig_activate);
+    MSHookMessageEx(ui,
+        sel_registerName("applicationSuspendAnimationDidStop:finished:context:"),
+        (IMP)hook_suspendStop, (IMP *)&orig_suspendStop);
     MSHookMessageEx(ui, sel_registerName("stopRestoringIconList"),
                     (IMP)hook_stopRestore, (IMP *)&orig_stopRestore);
 }
