@@ -1,0 +1,51 @@
+name: Release tweak
+
+# Tag a commit `vX.Y` (matching the `Version:` in `control` exactly) and
+# push the tag to cut a GitHub Release with the built .deb attached, e.g.:
+#
+#   git tag v0.3
+#   git push origin v0.3
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-theos
+
+      - name: Build package
+        run: make package FINALPACKAGE=1
+
+      # Catches the easy mistake of tagging before bumping the Makefile's
+      # VERSION / control's Version -- otherwise the release's tag and the
+      # .deb's actual package version silently disagree.
+      - name: Check tag matches package version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          control_version="$(grep -i '^Version:' control | cut -d' ' -f2-)"
+          if [ "$tag_version" != "$control_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME (version '$tag_version') doesn't match control's Version: $control_version. Bump VERSION in the Makefile and Version in control, commit, then re-tag."
+            exit 1
+          fi
+
+      - name: Locate built .deb
+        id: deb
+        run: |
+          deb_path="$(ls debs/packages/*.deb)"
+          echo "path=$deb_path" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: Wallpaper Parallax ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ${{ steps.deb.outputs.path }}

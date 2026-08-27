@@ -1,0 +1,72 @@
+name: Setup theos
+description: >
+  Installs theos, its Linux clang/ldid toolchain, and an iOS SDK fetched
+  on demand -- everything a `make package` in this repo needs, cached
+  across runs. Shared by the build and release workflows so they can't
+  drift apart.
+
+inputs:
+  theos-dir:
+    description: Where to install theos, relative to the workspace.
+    default: theos
+  sdk-name:
+    description: SDK directory name theos expects under theos/sdks/.
+    default: iPhoneOS6.1.sdk
+  sdk-url:
+    description: Download URL for the SDK zip (growtopiajaw/iPhoneOS-SDK release asset).
+    default: https://github.com/growtopiajaw/iPhoneOS-SDK/releases/download/v1.0/iPhoneOS6.1.sdk.zip
+  cache-key-suffix:
+    description: Bump to force a clean re-fetch of theos/toolchain/SDK.
+    default: v1
+
+runs:
+  using: composite
+  steps:
+    # The repo tracks a `theos -> /opt/theos` symlink for the on-device dev
+    # setup (see the project's device-setup notes); /opt/theos won't exist
+    # on a runner, so swap it for a real, populated directory.
+    - name: Remove dev-machine theos symlink
+      shell: bash
+      run: '[ -L "${{ inputs.theos-dir }}" ] && rm -f "${{ inputs.theos-dir }}" || true'
+
+    - name: Install host build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential fakeroot rsync curl perl zip unzip git libxml2 libtinfo6
+        sudo update-alternatives --set fakeroot /usr/bin/fakeroot-sysv || true
+
+    - name: Export THEOS
+      shell: bash
+      run: echo "THEOS=$(readlink -f "${{ inputs.theos-dir }}")" >> "$GITHUB_ENV"
+
+    # Theos itself (makefiles/bin/dm.pl) plus the prebuilt Linux clang/ldid
+    # toolchain and the SDK rarely change, so cache the lot.
+    - name: Cache theos + toolchain + SDK
+      id: theos-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ inputs.theos-dir }}
+        key: theos-linux-x86_64-${{ inputs.sdk-name }}-${{ inputs.cache-key-suffix }}
+
+    - name: Clone theos
+      if: steps.theos-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
+
+    - name: Install Linux iOS toolchain (clang/ldid, no Swift)
+      if: steps.theos-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz \
+          | tar -xJf - -C "$THEOS/toolchain/"
+
+    - name: Download SDK
+      if: steps.theos-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        mkdir -p "$THEOS/sdks"
+        curl -fL -o /tmp/sdk.zip "${{ inputs.sdk-url }}"
+        unzip -q /tmp/sdk.zip -d "$THEOS/sdks"
+        rm -f /tmp/sdk.zip
+        test -d "$THEOS/sdks/${{ inputs.sdk-name }}"
