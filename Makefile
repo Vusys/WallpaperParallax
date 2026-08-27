@@ -35,3 +35,13 @@ WallpaperParallax_FRAMEWORKS += UIKit QuartzCore CoreGraphics
 WallpaperParallax_LDFLAGS += -Wl,-undefined,dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+# The Settings-bundle specifier plist (WallpaperParallaxPrefs.plist) lives
+# under layout/Library/PreferenceLoader/Preferences/ -- Theos auto-detects
+# any `layout/` directory and rsyncs its contents straight into the package
+# at the matching filesystem path (see THEOS_LAYOUT_DIR in
+# theos/makefiles/common.mk), so `make package` now bundles it and `dpkg -i`
+# installs it to the right place with no separate manual `scp`. Previously
+# this file was hand-copied to the device once and then silently went stale
+# across rebuilds/renames -- exactly the bug that made Settings show the old
+# "ScrollingWallpaper" copy after the rename to Wallpaper Parallax.
