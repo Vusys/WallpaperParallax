@@ -1,0 +1,9 @@
+Package: com.ios6hacks.scrollingwallpaper
+Name: ScrollingWallpaper
+Depends: mobilesubstrate, preferenceloader
+Version: 0.3
+Architecture: iphoneos-arm
+Description: Parallax wallpaper scrolling for iOS 6, like Android. Renders its own SBWallpaperView instance instead of transforming the stock one, so app-open/close transitions no longer fight our pan.
+Maintainer: Vusys
+Author: Vusys
+Section: Tweaks

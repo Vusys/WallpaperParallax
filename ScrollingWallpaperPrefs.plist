@@ -31,6 +31,62 @@
 			<key>PostNotification</key>
 			<string>com.ios6hacks.scrollingwallpaper/prefsChanged</string>
 		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>How far the wallpaper pans between pages. Left is subtle, right is a stronger Android-style parallax.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>default</key>
+			<real>0.4</real>
+			<key>defaults</key>
+			<string>com.ios6hacks.scrollingwallpaper</string>
+			<key>key</key>
+			<string>Strength</string>
+			<key>minimumValue</key>
+			<real>0.0</real>
+			<key>maximumValue</key>
+			<real>1.0</real>
+			<key>PostNotification</key>
+			<string>com.ios6hacks.scrollingwallpaper/prefsChanged</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>isStaticText</key>
+			<true/>
+			<key>label</key>
+			<string>About</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>key</key>
+			<string>ScrollingWallpaperVersion</string>
+			<key>label</key>
+			<string>Version</string>
+			<key>value</key>
+			<string>0.3</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>key</key>
+			<string>ScrollingWallpaperAuthor</string>
+			<key>label</key>
+			<string>Author</string>
+			<key>value</key>
+			<string>Vusys</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>ios6hacks — experimental jailbreak tweaks for iOS 6.1.3.</string>
+		</dict>
 	</array>
 	<key>title</key>
 	<string>ScrollingWallpaper</string>
