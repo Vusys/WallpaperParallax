@@ -25,6 +25,12 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v4
 
+      # The repo tracks a `theos -> /opt/theos` symlink for the on-device
+      # dev setup (see the project's device-setup notes); /opt/theos won't
+      # exist on this runner, so swap it for a real, populated ./theos.
+      - name: Remove dev-machine theos symlink
+        run: rm -f theos
+
       - name: Install host build dependencies
         run: |
           sudo apt-get update
@@ -32,8 +38,8 @@ jobs:
           sudo update-alternatives --set fakeroot /usr/bin/fakeroot-sysv || true
 
       # Theos itself (makefiles/bin/dm.pl) plus the prebuilt Linux clang/ldid
-      # toolchain and the iOS 6.1 SDK rarely change, so cache the lot keyed
-      # on this file -- bump CACHE_VERSION below to force a rebuild.
+      # toolchain and the iOS 6.1 SDK rarely change, so cache the lot --
+      # bump the "-v1" cache key suffix below to force a clean re-fetch.
       - name: Cache theos + toolchain + SDK
         id: theos-cache
         uses: actions/cache@v4
