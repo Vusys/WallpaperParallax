@@ -1,5 +1,5 @@
 /*
- * ScrollingWallpaper - Parallax wallpaper scrolling for iOS 6
+ * Wallpaper Parallax - Parallax wallpaper scrolling for iOS 6
  * Makes the homescreen wallpaper pan with page swipes, like Android.
  *
  * v0.3 architecture change: instead of transforming SBUIController's own
@@ -34,10 +34,10 @@
  * lock screen one, when testing.
  *
  * Build (on-device theos, see project CLAUDE.md / SETUP.md):
- *   cd /var/root/ScrollingWallpaper
+ *   cd /var/root/WallpaperParallax
  *   export THEOS=/var/theos && export PATH=$THEOS/bin:$PATH
  *   make package
- *   dpkg -i --force-depends debs/packages/com.ios6hacks.scrollingwallpaper_*.deb
+ *   dpkg -i --force-depends debs/packages/com.vusys.wallpaperparallax_*.deb
  *   sbreload
  */
 
@@ -78,21 +78,44 @@
  * thread here; that project's notes speculate it might need to run off the
  * main thread instead, not investigated further. */
 
+/* Heavy trajectory/state logging (heartbeat, scroll, zoom, re-attach) is
+ * gated behind this build flag rather than deleted -- this device's
+ * environment is fragile enough (Barrel churn etc., see project memory)
+ * that it's routinely needed again. Default is set by the Makefile (DEBUG=1
+ * there); `make DEBUG=0` builds a quiet release with these compiled out
+ * entirely, not just silenced at runtime. */
+#ifndef SWP_DEBUG_LOG
+#define SWP_DEBUG_LOG 1
+#endif
+
+#if SWP_DEBUG_LOG
+#define SWPLog(...) NSLog(__VA_ARGS__)
+#else
+#define SWPLog(...) do {} while (0)
+#endif
+
 #pragma mark - Constants
 
 static const float kMinScale        = 1.00f; /* strength=0.0 -- no effect */
-static const float kMaxScale        = 1.20f; /* strength=1.0 -- strongest effect */
-static const float kDefaultStrength = 0.4f;  /* -> 1.08 scale, the original hardcoded value */
+/* strength=1.0 -- strongest effect. The old top end (1.20, i.e. a 0.20
+ * overhang) felt too weak in practice -- confirmed by testing, dragging the
+ * slider all the way to the right still only read as roughly 75% of a
+ * proper Android-style parallax. Rescaled so that old max now sits at the
+ * 75% mark of the new range instead of at 100%: 0.20 / 0.75 = 0.2667
+ * overhang -> 1.2667 scale at strength=1.0, i.e. every setting hits
+ * noticeably harder than before. */
+static const float kMaxScale        = 1.2667f;
+static const float kDefaultStrength = 0.4f;  /* -> ~1.107 scale under the rescaled range above */
 static const float kOpenZoomFactor  = 1.4f;  /* iOS's own zoom-in scale on app open, confirmed exact and repeatable */
 static const double kZoomAnimDuration = 0.5; /* matches the real duration observed from genuine iOS zoom calls */
 
-#define PREFS_ID CFSTR("com.ios6hacks.scrollingwallpaper")
+#define PREFS_ID CFSTR("com.vusys.wallpaperparallax")
 
 #pragma mark - State
 
 static float sProgress = 0.0f;
 static BOOL  sEnabled  = YES;
-static float sScale    = 1.08f; /* "Strength" pref -- see loadPrefs */
+static float sScale    = 1.107f; /* "Strength" pref -- see loadPrefs */
 
 
 /* Our own, independently-alloc'd wallpaper view. Created lazily on first
@@ -191,7 +214,7 @@ static SBWallpaperView *createOurWallpaperView(void) {
         initWithOrientation:orientation variant:0];
     attachOursNextToStock(ours, stock);
 
-    NSLog(@"[ScrollingWallpaper] created own SBWallpaperView %@ frame=%@ orientation=%d "
+    SWPLog(@"[WallpaperParallax] created own SBWallpaperView %@ frame=%@ orientation=%d "
           @"image=%@ (stock=%@ stock.image=%@)",
           ours, NSStringFromCGRect(ours.frame), orientation, ours.image,
           stock, ((UIImageView *)stock).image);
@@ -250,7 +273,7 @@ static void ensureOurWallpaperView(void) {
 
     if (!stock || !stock.superview) return; /* heal on the next opportunity instead */
 
-    NSLog(@"[ScrollingWallpaper] re-attaching own view %@ to %@ (was evicted or orphaned, "
+    SWPLog(@"[WallpaperParallax] re-attaching own view %@ to %@ (was evicted or orphaned, "
           @"had window=%@, stock=%@)",
           sOurWallpaperView, stock.superview, sOurWallpaperView.window, stock);
     /* attachOursNextToStock repositions via .bounds/.center now, not
@@ -297,7 +320,13 @@ static void ensureOurWallpaperView(void) {
     UIWindow *windowBefore = sOurWallpaperView.window;
     ensureOurWallpaperView();
     CGAffineTransform after = sOurWallpaperView ? sOurWallpaperView.transform : CGAffineTransformIdentity;
-    NSLog(@"[ScrollingWallpaper] heartbeat before=%@ windowBefore=%@ after=%@ sScale=%.3f sProgress=%.3f",
+    /* Only actually consumed inside SWPLog below, which compiles away
+     * entirely under SWP_LOG=0 -- these casts keep that build warning-free
+     * (-Wunused-variable) without gating the trajectory-capture code itself
+     * behind #if, so both builds compute the exact same before/after values
+     * regardless of whether they end up logged. */
+    (void)before; (void)windowBefore; (void)after;
+    SWPLog(@"[WallpaperParallax] heartbeat before=%@ windowBefore=%@ after=%@ sScale=%.3f sProgress=%.3f",
           NSStringFromCGAffineTransform(before), windowBefore,
           NSStringFromCGAffineTransform(after), sScale, sProgress);
 }
@@ -331,7 +360,7 @@ static float readProgress(void) {
 static void setVisualEnabled(BOOL enabled) {
     if (enabled) ensureOurWallpaperView();
     UIView *stock = stockWallpaperView();
-    NSLog(@"[ScrollingWallpaper] setVisualEnabled:%d ours=%@ stock=%@ scale=%.3f",
+    SWPLog(@"[WallpaperParallax] setVisualEnabled:%d ours=%@ stock=%@ scale=%.3f",
           enabled, sOurWallpaperView, stock, sScale);
     if (enabled) {
         sOurWallpaperView.alpha = 1.0f;
@@ -408,11 +437,11 @@ static void prefsChanged(CFNotificationCenterRef c, void *obs,
     if (shouldLog) sLastScrollLog = now;
 
     if (!sOurWallpaperView) {
-        if (shouldLog) NSLog(@"[ScrollingWallpaper] scrollViewDidScroll: no view yet");
+        if (shouldLog) SWPLog(@"[WallpaperParallax] scrollViewDidScroll: no view yet");
         return;
     }
     if (!sv.isDragging && !sv.isDecelerating) {
-        if (shouldLog) NSLog(@"[ScrollingWallpaper] scrollViewDidScroll: skip (not dragging/decelerating)");
+        if (shouldLog) SWPLog(@"[WallpaperParallax] scrollViewDidScroll: skip (not dragging/decelerating)");
         return;
     }
 
@@ -422,7 +451,7 @@ static void prefsChanged(CFNotificationCenterRef c, void *obs,
     sProgress = p < 0.0f ? 0.0f : p > 1.0f ? 1.0f : p;
     applyParallax();
     if (shouldLog) {
-        NSLog(@"[ScrollingWallpaper] scroll rawP=%.3f p(clamped)=%.3f offset=%@ contentSize=%@ "
+        SWPLog(@"[WallpaperParallax] scroll rawP=%.3f p(clamped)=%.3f offset=%@ contentSize=%@ "
               @"bounds=%@ transform=%@",
               p, sProgress, NSStringFromCGPoint(sv.contentOffset),
               NSStringFromCGSize(sv.contentSize), NSStringFromCGRect(sv.bounds),
@@ -470,7 +499,7 @@ static void applyOpenZoom(void) {
     if (!sOurWallpaperView) return;
     sProgress = readProgress(); /* may have changed while backgrounded, e.g. a page-jump from Spotlight */
     CGAffineTransform target = parallaxTransformWithScale(sOurWallpaperView, sScale * kOpenZoomFactor);
-    NSLog(@"[ScrollingWallpaper] applyOpenZoom before=%@ target=%@",
+    SWPLog(@"[WallpaperParallax] applyOpenZoom before=%@ target=%@",
           NSStringFromCGAffineTransform(sOurWallpaperView.transform), NSStringFromCGAffineTransform(target));
     [UIView beginAnimations:nil context:NULL];
     [UIView setAnimationDuration:kZoomAnimDuration];
@@ -483,7 +512,7 @@ static void applyCloseZoom(void) {
     ensureOurWallpaperView();
     if (!sOurWallpaperView) return;
     CGAffineTransform target = parallaxTransform(sOurWallpaperView); /* sScale, no extra zoom */
-    NSLog(@"[ScrollingWallpaper] applyCloseZoom before=%@ target=%@",
+    SWPLog(@"[WallpaperParallax] applyCloseZoom before=%@ target=%@",
           NSStringFromCGAffineTransform(sOurWallpaperView.transform), NSStringFromCGAffineTransform(target));
     [UIView beginAnimations:nil context:NULL];
     [UIView setAnimationDuration:kZoomAnimDuration];
@@ -531,6 +560,6 @@ static void applyCloseZoom(void) {
     CFNotificationCenterAddObserver(
         CFNotificationCenterGetDarwinNotifyCenter(), NULL,
         prefsChanged,
-        CFSTR("com.ios6hacks.scrollingwallpaper/prefsChanged"),
+        CFSTR("com.vusys.wallpaperparallax/prefsChanged"),
         NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 }

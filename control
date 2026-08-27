@@ -1,5 +1,5 @@
-Package: com.ios6hacks.scrollingwallpaper
-Name: ScrollingWallpaper
+Package: com.vusys.wallpaperparallax
+Name: Wallpaper Parallax
 Depends: mobilesubstrate, preferenceloader
 Version: 0.3
 Architecture: iphoneos-arm

@@ -7,7 +7,7 @@
 		<key>cell</key>
 		<string>PSLinkCell</string>
 		<key>label</key>
-		<string>ScrollingWallpaper</string>
+		<string>Wallpaper Parallax</string>
 	</dict>
 	<key>items</key>
 	<array>
@@ -23,19 +23,19 @@
 			<key>default</key>
 			<true/>
 			<key>defaults</key>
-			<string>com.ios6hacks.scrollingwallpaper</string>
+			<string>com.vusys.wallpaperparallax</string>
 			<key>key</key>
 			<string>Enabled</string>
 			<key>label</key>
 			<string>Enable</string>
 			<key>PostNotification</key>
-			<string>com.ios6hacks.scrollingwallpaper/prefsChanged</string>
+			<string>com.vusys.wallpaperparallax/prefsChanged</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>How far the wallpaper pans between pages. Left is subtle, right is a stronger Android-style parallax.</string>
+			<string>How far the wallpaper pans between pages. Left is subtle, right is stronger.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -43,7 +43,7 @@
 			<key>default</key>
 			<real>0.4</real>
 			<key>defaults</key>
-			<string>com.ios6hacks.scrollingwallpaper</string>
+			<string>com.vusys.wallpaperparallax</string>
 			<key>key</key>
 			<string>Strength</string>
 			<key>minimumValue</key>
@@ -51,44 +51,16 @@
 			<key>maximumValue</key>
 			<real>1.0</real>
 			<key>PostNotification</key>
-			<string>com.ios6hacks.scrollingwallpaper/prefsChanged</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>isStaticText</key>
-			<true/>
-			<key>label</key>
-			<string>About</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSStaticTextCell</string>
-			<key>key</key>
-			<string>ScrollingWallpaperVersion</string>
-			<key>label</key>
-			<string>Version</string>
-			<key>value</key>
-			<string>0.3</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSStaticTextCell</string>
-			<key>key</key>
-			<string>ScrollingWallpaperAuthor</string>
-			<key>label</key>
-			<string>Author</string>
-			<key>value</key>
-			<string>Vusys</string>
+			<string>com.vusys.wallpaperparallax/prefsChanged</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>ios6hacks — experimental jailbreak tweaks for iOS 6.1.3.</string>
+			<string>Wallpaper Parallax (0.3) by Vusys</string>
 		</dict>
 	</array>
 	<key>title</key>
-	<string>ScrollingWallpaper</string>
+	<string>Wallpaper Parallax</string>
 </dict>
 </plist>
