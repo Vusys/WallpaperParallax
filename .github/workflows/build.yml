@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # The repo tracks a `theos -> /opt/theos` symlink for the on-device
       # dev setup (see the project's device-setup notes); /opt/theos won't
@@ -42,7 +42,7 @@ jobs:
       # bump the "-v1" cache key suffix below to force a clean re-fetch.
       - name: Cache theos + toolchain + SDK
         id: theos-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.THEOS }}
           key: theos-linux-x86_64-${{ env.SDK_NAME }}-v1
@@ -70,7 +70,7 @@ jobs:
         run: make package FINALPACKAGE=1
 
       - name: Upload .deb artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: WallpaperParallax-deb
           path: debs/packages/*.deb
