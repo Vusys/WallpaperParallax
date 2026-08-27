@@ -1,0 +1,77 @@
+name: Build tweak
+
+# This project builds against an iOS 6.1 SDK, which Apple stopped shipping
+# with Xcode long ago and which theos's own `install-sdk` helper doesn't
+# carry either (it only tracks recent SDKs). We fetch it on demand from
+# https://github.com/growtopiajaw/iPhoneOS-SDK instead, which mirrors old
+# Apple SDKs as GitHub release assets, and build with theos's Linux
+# toolchain (clang + ldid), no Xcode/macOS required.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  THEOS: ${{ github.workspace }}/theos
+  SDK_NAME: iPhoneOS6.1.sdk
+  SDK_URL: https://github.com/growtopiajaw/iPhoneOS-SDK/releases/download/v1.0/iPhoneOS6.1.sdk.zip
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+
+      # The repo tracks a `theos -> /opt/theos` symlink for the on-device
+      # dev setup (see the project's device-setup notes); /opt/theos won't
+      # exist on this runner, so swap it for a real, populated ./theos.
+      - name: Remove dev-machine theos symlink
+        run: rm -f theos
+
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential fakeroot rsync curl perl zip unzip git libxml2 libtinfo6
+          sudo update-alternatives --set fakeroot /usr/bin/fakeroot-sysv || true
+
+      # Theos itself (makefiles/bin/dm.pl) plus the prebuilt Linux clang/ldid
+      # toolchain and the iOS 6.1 SDK rarely change, so cache the lot --
+      # bump the "-v1" cache key suffix below to force a clean re-fetch.
+      - name: Cache theos + toolchain + SDK
+        id: theos-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.THEOS }}
+          key: theos-linux-x86_64-${{ env.SDK_NAME }}-v1
+
+      - name: Clone theos
+        if: steps.theos-cache.outputs.cache-hit != 'true'
+        run: git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
+
+      - name: Install Linux iOS toolchain (clang/ldid, no Swift)
+        if: steps.theos-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz \
+            | tar -xJf - -C "$THEOS/toolchain/"
+
+      - name: Download iPhoneOS 6.1 SDK
+        if: steps.theos-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$THEOS/sdks"
+          curl -fL -o /tmp/sdk.zip "$SDK_URL"
+          unzip -q /tmp/sdk.zip -d "$THEOS/sdks"
+          rm -f /tmp/sdk.zip
+          test -d "$THEOS/sdks/$SDK_NAME"
+
+      - name: Build package
+        run: make package FINALPACKAGE=1
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: WallpaperParallax-deb
+          path: debs/packages/*.deb
+          if-no-files-found: error
